@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Teachable Machine - Webcam & Upload</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; background: #f0f0f0; }
+    #video-container, #upload-container { margin: 20px auto; }
+    #label-container { margin-top: 16px; font-size: 18px; white-space: pre-line; }
+    canvas, video, img { max-width: 100%; }
+    button { margin: 6px; padding: 10px 16px; font-size: 16px; cursor: pointer; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .hint { font-size: 13px; opacity: 0.75; margin-top: 6px; }
+    .box { background: #fff; border-radius: 12px; padding: 14px; max-width: 680px; margin: 14px auto; box-shadow: 0 2px 12px rgba(0,0,0,0.08); }
+  </style>
+</head>
+<body>
+  <h2>🌿 ทดสอบโมเดลด้วยกล้องหรืออัปโหลดภาพ</h2>
+
+  <div class="box">
+    <div id="video-container">
+      <button id="btnStartWebcam" onclick="startWebcam()" disabled>🎥 เริ่มกล้อง</button>
+      <button id="btnStopWebcam" onclick="stopWebcam()" disabled>⏹️ หยุดกล้อง</button>
+      <div class="hint">ปุ่มจะเปิดใช้งานเมื่อ “โหลดโมเดลสำเร็จ”</div>
+
+      <video id="webcam" autoplay playsinline width="320" height="240" style="display:none;"></video>
+      <canvas id="canvas" width="320" height="240" style="display:none;"></canvas>
+    </div>
+
+    <hr style="margin:16px 0; opacity:0.25;" />
+
+    <div id="upload-container">
+      <input type="file" id="imageUpload" accept="image/*" />
+      <button id="btnProcess" onclick="processUploadedImage()" disabled>🧠 ประมวลผล</button>
+      <div class="hint">เลือกภาพแล้วกด “ประมวลผล”</div>
+
+      <img id="uploadedImage" alt="uploaded" style="display:none; margin-top:10px; max-height:320px;" />
+    </div>
+  </div>
+
+  <div id="label-container">⏳ กำลังโหลดไลบรารี + โมเดล…</div>
+
+  <!-- ✅ สำคัญ: ระบุไฟล์ UMD/Minified โดยตรง เพื่อกัน error "exports is not defined" -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+
+  <script>
+    // ✅ ใส่ลิงก์โมเดลของคุณตรงนี้ (ลงท้ายด้วย /)
+    const modelURL = "https://teachablemachine.withgoogle.com/models/m23gUS6VV/";
+
+    let model = null;
+    let webcamStream = null;
+    let predictTimer = null;
+    let uploadedFile = null;
+
+    const el = {
+      status: () => document.getElementById("label-container"),
+      btnStart: () => document.getElementById("btnStartWebcam"),
+      btnStop: () => document.getElementById("btnStopWebcam"),
+      btnProcess: () => document.getElementById("btnProcess"),
+      webcam: () => document.getElementById("webcam"),
+      canvas: () => document.getElementById("canvas"),
+      img: () => document.getElementById("uploadedImage"),
+      file: () => document.getElementById("imageUpload")
+    };
+
+    function setStatus(text) { el.status().innerText = text; }
+    function setReady(enabled) {
+      el.btnStart().disabled = !enabled;
+      el.btnProcess().disabled = !enabled;
+      el.btnStop().disabled = true;
+    }
+
+    async function init() {
+      setReady(false);
+      setStatus("⏳ กำลังโหลดไลบรารี + โมเดล…");
+
+      try {
+        // ไลบรารีต้องขึ้นก่อน
+        if (!window.tf) throw new Error("TensorFlow.js (tf) ยังไม่พร้อม");
+        if (!window.tmImage) throw new Error("tmImage ยังไม่พร้อม (ไฟล์ teachablemachine-image โหลดไม่สำเร็จ)");
+
+        model = await tmImage.load(modelURL + "model.json", modelURL + "metadata.json");
+        console.log("✅ โมเดลโหลดสำเร็จ");
+        setStatus("✅ โหลดโมเดลสำเร็จ — เลือกใช้กล้องหรืออัปโหลดภาพได้เลย");
+        setReady(true);
+      } catch (err) {
+        console.error("❌ init error:", err);
+        setStatus(
+          "❌ โหลดโมเดล/ไลบรารีไม่สำเร็จ\n" +
+          "เช็ก 3 อย่างนี้:\n" +
+          "1) เปิด DevTools > Network ดูว่าไฟล์ tf.min.js และ teachablemachine-image.min.js โหลดได้ไหม\n" +
+          "2) ถ้าใช้ AdBlock/Privacy extension ให้ปิดชั่วคราว\n" +
+          "3) เช็กว่า modelURL ถูกต้องและลงท้ายด้วย /\n\n" +
+          "รายละเอียด: " + (err?.message || err)
+        );
+      }
+    }
+    window.addEventListener("load", init);
+
+    async function startWebcam() {
+      if (!model) { setStatus("⏳ โมเดลยังโหลดไม่เสร็จ"); return; }
+      stopWebcam();
+
+      try {
+        webcamStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        const webcam = el.webcam();
+        webcam.srcObject = webcamStream;
+        webcam.style.display = "block";
+
+        const canvas = el.canvas();
+        canvas.style.display = "block";
+        el.btnStop().disabled = false;
+
+        predictTimer = setInterval(async () => {
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(webcam, 0, 0, canvas.width, canvas.height);
+          const prediction = await model.predict(canvas);
+          showResult(prediction);
+        }, 500);
+      } catch (err) {
+        console.error("❌ webcam error:", err);
+        setStatus("❌ เปิดกล้องไม่สำเร็จ: กรุณาอนุญาตการใช้กล้อง แล้วลองใหม่");
+        stopWebcam();
+      }
+    }
+
+    function stopWebcam() {
+      if (predictTimer) { clearInterval(predictTimer); predictTimer = null; }
+      if (webcamStream) { webcamStream.getTracks().forEach(t => t.stop()); webcamStream = null; }
+      const webcam = el.webcam();
+      const canvas = el.canvas();
+      if (webcam) { webcam.srcObject = null; webcam.style.display = "none"; }
+      if (canvas) { canvas.style.display = "none"; }
+      el.btnStop().disabled = true;
+    }
+
+    el.file().addEventListener("change", (event) => {
+      uploadedFile = event.target.files?.[0] || null;
+      const img = el.img();
+
+      if (!uploadedFile) { img.style.display = "none"; return; }
+      img.src = URL.createObjectURL(uploadedFile);
+      img.onload = () => { img.style.display = "block"; };
+    });
+
+    async function processUploadedImage() {
+      if (!model) { setStatus("⏳ โมเดลยังโหลดไม่เสร็จ"); return; }
+      if (!uploadedFile) { setStatus("⚠️ กรุณาเลือกไฟล์ภาพก่อนค่ะ"); return; }
+
+      const img = el.img();
+      if (!img.complete) { setStatus("⏳ ภาพยังโหลดไม่เสร็จ กรุณาลองอีกครั้ง"); return; }
+
+      try {
+        const prediction = await model.predict(img);
+        showResult(prediction);
+      } catch (err) {
+        console.error("❌ predict error:", err);
+        setStatus("❌ ทำนายจากรูปไม่สำเร็จ — เปิด Console ดูรายละเอียด");
+      }
+    }
+
+    function showResult(prediction) {
+      const sorted = [...prediction].sort((a,b) => b.probability - a.probability);
+      const top = sorted[0];
+      const lines = sorted.map(p => `${p.className}: ${Math.round(p.probability * 100)}%`).join("\n");
+      setStatus(`✅ ผลลัพธ์ (Top-1): ${top.className} (${Math.round(top.probability*100)}%)\n\n${lines}`);
+    }
+  </script>
+</body>
+</html>
